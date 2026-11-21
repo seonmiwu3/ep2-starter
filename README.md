@@ -224,3 +224,7 @@ separate for testing next session.
   This has already caught us once. The file is commented; read it, don't prune it.
 - **Can't upload / can't dump flash?** Hold **BOOT**, tap **RESET**, release,
   then retry — that forces download mode.
+
+
+
+**`platformio.ini` note:** `platformio.ini` is the PlatformIO configuration file that defines the target board (`esp32-s3-devkitc-1`), Arduino framework, octal flash/PSRAM memory flags, build settings, and required libraries for this project. ** google AI used 
