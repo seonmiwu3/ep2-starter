@@ -36,7 +36,7 @@ void setup() {
 
 void loop() {
   digitalWrite(LED_PIN, HIGH);   // on
-  delay(5000);                    // <-- wait half a second
+  delay(5000);                    // <-- wait 5 second
 
   digitalWrite(LED_PIN, LOW);    // off
   delay(5000);                    // <-- and again
