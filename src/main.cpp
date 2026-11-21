@@ -24,20 +24,47 @@
  */
 #include <Arduino.h>
 
-#define LED_PIN 40
+/*
+ * Session 1 — Custom Blink: International Morse Code SOS (... --- ...)
+ * --------------------------------------------------------------------------
+ * Wiring: GPIO40 -> 220-330 ohm resistor -> LED long leg (+) -> short leg (-) -> GND
+ *
+ * Morse code timing rules used here (1 unit = 200 ms):
+ *   - Dot (.)          = 1 unit  (200 ms ON)
+ *   - Dash (-)         = 3 units (600 ms ON)
+ *   - Intra-character  = 1 unit  (200 ms OFF between dots/dashes in a letter)
+ *   - Inter-character  = 3 units (500 ms total OFF between letters: 200 ms + 300 ms)
+ *   - Word gap         = ~8 units (1700 ms total OFF before repeating SOS)
+ */
+
+#include <Arduino.h>
+
+#define LED_PIN 40  // External plain LED connected to GPIO40
 
 void setup() {
   Serial.begin(115200);
   delay(300);
-  pinMode(LED_PIN, OUTPUT);
+  pinMode(LED_PIN, OUTPUT);  // Configure GPIO40 as a digital output
   Serial.println();
-  Serial.println("Plain LED blinking on GPIO40.");
+  Serial.println("SOS Morse code blinking on GPIO40.");
+}
+
+// Helper function: flashes the LED ON for 'duration' ms, then OFF for 1 unit (200 ms)
+void blink(int duration) {
+  digitalWrite(LED_PIN, HIGH);  // Turn LED ON
+  delay(duration);              // Keep LED ON (200 ms for dot, 600 ms for dash)
+  digitalWrite(LED_PIN, LOW);   // Turn LED OFF
+  delay(200);                   // Standard 1-unit pause between flashes in the same letter
 }
 
 void loop() {
-  digitalWrite(LED_PIN, HIGH);   // on
-  delay(5000);                    // <-- wait 5 seconds
+  // W (.--)
+  blink(200); blink(600); blink(600);
+  delay(300); // Pause between letters
 
-  digitalWrite(LED_PIN, LOW);    // off
-  delay(5000);                    // <-- and again
+  // E (.)
+  blink(200);
+  delay(1500); // Pause before repeating WE
 }
+
+
