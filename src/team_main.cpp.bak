@@ -1,0 +1,296 @@
+#include <Arduino.h>
+#include <Wire.h>
+
+// =====================================
+// PIN CONFIGURATION
+// =====================================
+
+// GSR Click - Analog output
+#define GSR_PIN 4
+
+// Heart Rate 11 Click - OB1203
+#define HR_SDA  21
+#define HR_SCL  12
+#define HR_INT  13
+
+#define OB1203_ADDR 0x53
+
+// OB1203 Registers
+#define REG_STATUS_1       0x01
+#define REG_MAIN_CTRL_0    0x15
+#define REG_MAIN_CTRL_1    0x16
+#define REG_INT_CFG_1      0x2C
+#define REG_PPG_GAIN       0x2E
+#define REG_IR_CURRENT_0   0x30
+#define REG_IR_CURRENT_1   0x31
+#define REG_PPG_AVG        0x35
+#define REG_PPG_PERIOD     0x36
+#define REG_FIFO_DATA      0x3B
+
+// =====================================
+// SENSOR STATUS
+// =====================================
+
+bool heartSensorReady = false;
+
+unsigned long lastPrintTime = 0;
+
+const unsigned long PRINT_INTERVAL = 1000;
+
+// =====================================
+// OB1203 I2C FUNCTIONS
+// =====================================
+
+bool writeRegister(uint8_t reg, uint8_t value) {
+
+    Wire.beginTransmission(OB1203_ADDR);
+
+    Wire.write(reg);
+    Wire.write(value);
+
+    return Wire.endTransmission() == 0;
+}
+
+bool readRegister(uint8_t reg, uint8_t &value) {
+
+    Wire.beginTransmission(OB1203_ADDR);
+    Wire.write(reg);
+
+    if (Wire.endTransmission(true) != 0) {
+        return false;
+    }
+
+    if (Wire.requestFrom(
+        (uint8_t)OB1203_ADDR,
+        (uint8_t)1
+    ) != 1) {
+        return false;
+    }
+
+    value = Wire.read();
+
+    return true;
+}
+
+// =====================================
+// INITIALIZE HEART RATE 11
+// =====================================
+
+bool initializeHeartSensor() {
+
+    Serial.println("[HEART] Initializing OB1203...");
+
+    // Software reset
+    if (!writeRegister(REG_MAIN_CTRL_0, 0x80)) {
+        return false;
+    }
+
+    delay(100);
+
+    // HR mode + PPG enabled
+    if (!writeRegister(REG_MAIN_CTRL_1, 0x03)) {
+        return false;
+    }
+
+    // Enable PPG interrupt
+    if (!writeRegister(REG_INT_CFG_1, 0x10)) {
+        return false;
+    }
+
+    // IR LED current = approximately 50 mA
+    uint16_t current = 205;
+
+    if (!writeRegister(
+        REG_IR_CURRENT_0,
+        current & 0xFF
+    )) {
+        return false;
+    }
+
+    if (!writeRegister(
+        REG_IR_CURRENT_1,
+        current >> 8
+    )) {
+        return false;
+    }
+
+    // PPG gain
+    if (!writeRegister(REG_PPG_GAIN, 0x09)) {
+        return false;
+    }
+
+    // Average 32 samples
+    if (!writeRegister(REG_PPG_AVG, 0x5A)) {
+        return false;
+    }
+
+    // Pulse width 247 us, period 1 ms
+    if (!writeRegister(REG_PPG_PERIOD, 0x42)) {
+        return false;
+    }
+
+    Serial.println("[HEART] OB1203 initialized!");
+
+    return true;
+}
+
+// =====================================
+// READ PPG FIFO
+// =====================================
+
+bool readPPG(uint32_t &ppgValue) {
+
+    Wire.beginTransmission(OB1203_ADDR);
+
+    Wire.write(REG_FIFO_DATA);
+
+    if (Wire.endTransmission(true) != 0) {
+        return false;
+    }
+
+    if (Wire.requestFrom(
+        (uint8_t)OB1203_ADDR,
+        (uint8_t)3
+    ) != 3) {
+        return false;
+    }
+
+    uint8_t b0 = Wire.read();
+    uint8_t b1 = Wire.read();
+    uint8_t b2 = Wire.read();
+
+    ppgValue =
+        ((uint32_t)b2 << 16) |
+        ((uint32_t)b1 << 8) |
+        b0;
+
+    return true;
+}
+
+// =====================================
+// HEARTBEAT CALLBACK
+// =====================================
+
+void printPPG() {
+
+    uint32_t ppgValue;
+
+    if (readPPG(ppgValue)) {
+
+        Serial.print("[HEART] Raw PPG: ");
+
+        Serial.println(ppgValue);
+    }
+}
+
+// =====================================
+// SETUP
+// =====================================
+
+void setup() {
+
+    Serial.begin(115200);
+
+    delay(1000);
+
+    Serial.println();
+    Serial.println("=================================");
+    Serial.println(" ESP32-S3 BIOMETRIC SENSOR TEST");
+    Serial.println(" GSR Click + Heart Rate 11");
+    Serial.println("=================================");
+
+    // ---------------------------------
+    // Initialize GSR
+    // ---------------------------------
+
+    analogReadResolution(12);
+
+    analogSetPinAttenuation(
+        GSR_PIN,
+        ADC_11db
+    );
+
+    Serial.println("[GSR] Analog sensor initialized!");
+
+    // ---------------------------------
+    // Initialize I2C
+    // ---------------------------------
+
+    pinMode(HR_INT, INPUT_PULLUP);
+
+    Wire.begin(HR_SDA, HR_SCL);
+
+    Wire.setClock(100000);
+
+    Serial.println("[HEART] Checking OB1203...");
+
+    Wire.beginTransmission(OB1203_ADDR);
+
+    if (Wire.endTransmission() == 0) {
+
+        Serial.println("[HEART] OB1203 detected!");
+
+        heartSensorReady = initializeHeartSensor();
+
+    } else {
+
+        Serial.println("[HEART] ERROR: Sensor not found!");
+    }
+
+    if (!heartSensorReady) {
+        Serial.println("[HEART] Sensor unavailable");
+    }
+
+    Serial.println();
+    Serial.println("Starting measurements...");
+}
+
+// =====================================
+// MAIN LOOP
+// =====================================
+
+void loop() {
+
+    // ---------------------------------
+    // HEART RATE 11 - READ PPG
+    // ---------------------------------
+
+    if (heartSensorReady) {
+
+        // INT active LOW
+        if (digitalRead(HR_INT) == LOW) {
+
+            printPPG();
+        }
+    }
+
+    // ---------------------------------
+    // PRINT GSR EVERY SECOND
+    // ---------------------------------
+
+    if (millis() - lastPrintTime >= PRINT_INTERVAL) {
+
+        lastPrintTime = millis();
+
+        Serial.println("---------------------------------");
+
+        // GSR measurement
+        int gsrRaw = analogRead(GSR_PIN);
+
+        uint32_t gsrMilliVolts =
+            analogReadMilliVolts(GSR_PIN);
+
+        Serial.print("[GSR] Raw: ");
+        Serial.print(gsrRaw);
+
+        Serial.print(" | Voltage: ");
+        Serial.print(gsrMilliVolts);
+
+        Serial.println(" mV");
+
+        if (!heartSensorReady) {
+
+            Serial.println("[HEART] Sensor unavailable");
+        }
+    }
+}
