@@ -1,57 +1,78 @@
+/*
+ * Session 4 — run YOUR trained model on the board.
+ * --------------------------------------------------------------------------
+ * PREREQUISITE (do this first, or it will NOT compile — that's expected):
+ *   1. In Edge Impulse: Deployment -> "Arduino library" -> EON + int8 -> Build.
+ *   2. Unzip the downloaded .zip into the lib/ folder of this project.
+ *   3. Change the #include below to match the header the zip created
+ *      (look in lib/<your-project>/  -> it ends in _inferencing.h).
+ *
+ * This is the honest shape of on-device ML:
+ *   read the sensor -> fill a window -> run the model -> act on the result.
+ * No web server, no network — just the sensor and the model.
+ */
 #include <Arduino.h>
-#include <Wire.h>
 #include <Adafruit_MPU6050.h>
-#include <Adafruit_Sensor.h>
+#include <Wire.h>
 
-// Hardware pin definitions (Session 2 wiring)
-#define POT_PIN 4   // Potentiometer middle leg (analog input)
-#define LED_PIN 40  // External LED + resistor (PWM output)
+// 👇 CHANGE THIS to your Edge Impulse project's header:
+#include <seonmiwu-project-1_inferencing.h>
+
 
 Adafruit_MPU6050 mpu;
 
-// Tilt switch threshold on the Z-axis (m/s^2):
-// Flat/facing up is ~ +9.8 m/s^2; sideways is ~ 0; upside down is ~ -9.8.
-// Above 6.0 counts as "tilted up" -> LED enabled.
-const float TILT_THRESHOLD = 6.0;
+float buffer[EI_CLASSIFIER_DSP_INPUT_FRAME_SIZE];   // the window — allocated once
+int   i = 0;                                        // fill position
+
+void act_on(ei_impulse_result_t &result) {
+  // Pick the highest-confidence class.
+  int   best = 0;
+  float best_val = 0.0f;
+  for (int k = 0; k < EI_CLASSIFIER_LABEL_COUNT; k++) {
+    if (result.classification[k].value > best_val) {
+      best_val = result.classification[k].value;
+      best = k;
+    }
+  }
+  // Your threshold is a DECISION, not a default. Pick it for the error that
+  // hurts your project more (a missed event vs a false trigger).
+  if (best_val > 0.80f) {
+    Serial.printf(">> %s (%.0f%%)\n", result.classification[best].label, best_val * 100);
+    // TODO: your action here — light the RGB LED, move a servo, send a message.
+  }
+}
 
 void setup() {
   Serial.begin(115200);
-  pinMode(LED_PIN, OUTPUT);
-
-  // Initialize I2C bus on SDA = GPIO8, SCL = GPIO9
+  delay(300);
   Wire.begin(8, 9);
-  if (!mpu.begin()) {
-    Serial.println("MPU-6050 not found! Check wiring.");
-    while (1) {
-      delay(10);
-    }
-  }
-  Serial.println("Tilt switches LED, knob dims brightness.");
+  if (!mpu.begin()) { Serial.println("MPU not found"); while (true) delay(1000); }
+  mpu.setAccelerometerRange(MPU6050_RANGE_8_G);
 }
 
 void loop() {
-  // 1. Read potentiometer (0..4095) and scale to PWM duty cycle (0..255)
-  int raw = analogRead(POT_PIN);
-  int duty = raw / 16;
-  if (duty > 255) duty = 255;
-
-  // 2. Read MPU-6050 accelerometer (m/s^2)
   sensors_event_t a, g, t;
   mpu.getEvent(&a, &g, &t);
+  buffer[i++] = a.acceleration.x;
+  buffer[i++] = a.acceleration.y;
+  buffer[i++] = a.acceleration.z;
 
-  // 3. Tilt switch logic: enable dimming only when Z-axis points up
-  int applied_duty = 0;
-  if (a.acceleration.z > TILT_THRESHOLD) {
-    applied_duty = duty; // Tilted up -> knob controls LED brightness
-  } else {
-    applied_duty = 0;    // Tilted sideways or down -> LED stays OFF
+    if (i >= EI_CLASSIFIER_DSP_INPUT_FRAME_SIZE) {
+    signal_t signal;
+    numpy::signal_from_buffer(buffer, EI_CLASSIFIER_DSP_INPUT_FRAME_SIZE, &signal);
+
+    ei_impulse_result_t result;
+    unsigned long t0 = millis();
+    run_classifier(&signal, &result, false);
+    unsigned long wall_ms = millis() - t0;
+
+    Serial.printf("dsp %d ms, nn %d ms, wall %lu ms\n",
+                  result.timing.dsp, result.timing.classification, wall_ms);
+
+    act_on(result);
+    i = 0;
   }
 
-  analogWrite(LED_PIN, applied_duty);
 
-  // Print live values for verification
-  Serial.printf("Z: %.2f | raw: %d | duty: %d\n",
-                a.acceleration.z, raw, applied_duty);
-
-  delay(50);
+  delay(20);   // 50 Hz — the rate you trained at! (drop this and the model sees garbage)
 }
